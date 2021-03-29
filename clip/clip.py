@@ -20,6 +20,7 @@ _MODELS = {
     "RN101": "https://openaipublic.azureedge.net/clip/models/8fa8567bab74a42d41c5915025a8e4538c3bdbe8804a470a72f30b0d94fab599/RN101.pt",
     "RN50x4": "https://openaipublic.azureedge.net/clip/models/7e526bd135e493cef0776de27d5f42653e6b4c8bf9e0f653bb11773263205fdd/RN50x4.pt",
     "ViT-B/32": "https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt",
+    "ViT-H/14": "https://storage.cloud.google.com/vit_models/imagenet21k/ViT-H_14.npz",
 }
 
 
@@ -27,7 +28,10 @@ def _download(url: str, root: str = os.path.expanduser("~/.cache/clip")):
     os.makedirs(root, exist_ok=True)
     filename = os.path.basename(url)
 
-    expected_sha256 = url.split("/")[-2]
+    if url == _MODELS["ViT-H/14"]:
+        expected_sha256 = "6a2d766bf9be936d3b2b7907f4599cf883dfbf27a40ada883a69c23c200851c8"
+    else:
+        expected_sha256 = url.split("/")[-2]
     download_target = os.path.join(root, filename)
 
     if os.path.exists(download_target) and not os.path.isfile(download_target):
@@ -38,6 +42,9 @@ def _download(url: str, root: str = os.path.expanduser("~/.cache/clip")):
             return download_target
         else:
             warnings.warn(f"{download_target} exists, but the SHA256 checksum does not match; re-downloading the file")
+
+    if url == _MODELS["ViT-H/14"]:
+        raise RuntimeError(f"Please download ViT-H/14 weights from {_MODELS['ViT-H/14']} to $HOME/.cache/clip/ViT-H_14.npz")
 
     with urllib.request.urlopen(url) as source, open(download_target, "wb") as output:
         with tqdm(total=int(source.info().get("Content-Length")), ncols=80, unit='iB', unit_scale=True) as loop:
@@ -98,6 +105,32 @@ def load(name: str, device: Union[str, torch.device] = "cuda" if torch.cuda.is_a
         model_path = name
     else:
         raise RuntimeError(f"Model {name} not found; available models = {available_models()}")
+
+    if name == "ViT-H/14":
+        import ml_collections
+        import clip.modeling_jeonsworld
+        import numpy as np
+        config = ml_collections.ConfigDict()
+        config.patches = ml_collections.ConfigDict({'size': (14, 14)})
+        config.hidden_size = 1280
+        config.transformer = ml_collections.ConfigDict()
+        config.transformer.mlp_dim = 5120
+        config.transformer.num_heads = 16
+        config.transformer.num_layers = 32
+        config.transformer.attention_dropout_rate = 0.0
+        config.transformer.dropout_rate = 0.1
+        config.classifier = 'token'
+        config.representation_size = None
+
+        dummy_model, preprocess = load('ViT-B/32', device)
+        del dummy_model
+
+        weights = np.load(model_path)
+        model = clip.modeling_jeonsworld.VisionTransformer(config, 224, zero_head=True, num_classes=100)
+        model.load_from(weights)
+        model.to(device)
+
+        return model, preprocess
 
     try:
         # loading JIT archive
